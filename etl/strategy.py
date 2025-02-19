@@ -99,21 +99,20 @@ class OtoMotoETL(ETLStrategy):
             node_dict = input_dict.get('node', {})
             row = {}
 
-            # Metadata
-            row['scrape_date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            row['created_date'] = datetime.strptime(
-                node_dict.get('createdAt', "1900-01-01 00:00:00"), "%Y-%m-%d %H:%M:%S"
-            )
+            # Metadata - scrape data and creating advertisement
+            row['scrape_date'] = datetime.now().strftime("%Y-%m-%d")
+            created_date = node_dict.get('createdAt', "1900-01-01")
+            row['created_date'] = datetime.strptime(created_date[0:10], "%Y-%m-%d")
 
-            # Static mappings
+            # Title and description
             row['title'] = node_dict.get('title', "")
             row['short_description'] = node_dict.get('shortDescription', "")
-            
+
             # Price and currency
             price_info = node_dict.get('price', {}).get('amount', {})
             row['price'] = price_info.get('units', 0)
             row['currency'] = price_info.get('currencyCode', "UNKNOWN")
-            
+
             # Cepik verification
             row['cepik_verified'] = node_dict.get('cepikVerified', False)
 
@@ -132,8 +131,35 @@ class OtoMotoETL(ETLStrategy):
             print(f"Error processing input_dict: {e}")
             return {}
 
-    def _create_df_from_rows(self):
-        pass
+    def _create_df_from_row(self, df, row):
+        '''
+        Add a new row to DataFrame. If DataFrame doesnt exist create it.
+        :param df: input DataFrame or None
+        :param row: a flattened dictionary with extracted and mapped fields
+        :return: DataFrame with added row.
+        '''
+        # Create a new DataFrame or append to the existing one
+        if df is None:
+            return pd.DataFrame([row])
+        
+        return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+
+    def _set_dtype(self, df:pd.DataFrame, col:str, dtype:str):
+        '''
+        Change dtype in column's DataFrame. 
+        If dtype is numeric but value in column is not numeric - change to NaN.
+        :param df:
+        :param col: str columna name of df
+        :param dtype: accroding to https://pandas.pydata.org/docs/user_guide/basics.html#basics-dtypes
+        '''
+        try:
+            df.astype({col: dtype})
+        except ValueError:
+            if dtype in ['int', 'float']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            else: 
+                raise ValueError
+        return df
 
     def extarct(self, brand:str, model:str):
         # Code to scrape data from otomoto.pl
@@ -181,15 +207,18 @@ class OtoMotoETL(ETLStrategy):
         df = None
         for input_data in final_data:
             row = self._create_row_from_dict(input_data)
-            if df is None:
-                df = pd.DataFrame([row])
-            else:
-                df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+            df = self._create_df_from_row(df, row)
 
         return df
     
-    def transform(self, data):
+    def transform(self, df):
         # code to tranform data compliant schema
+        '''
+        * set datatypes: _set_dtype
+        * create new rows e.g. Car_year, price_pln, 
+        * solve NaN
+        '''
+
         return
 
     def load(self, data):
@@ -208,9 +237,11 @@ class ETLContext:
 
 
 if __name__=='__main__':
+    
     from IPython.display import display
-
     etl = OtoMotoETL()
     df = etl.extarct(brand='porsche', model='cayenne')
-    df.to_csv('extract_data.csv')
-    display(df)
+    display(df.dtypes)
+    df = etl._set_dtype(df, 'year', 'int')
+    display(df.dtypes)
+
