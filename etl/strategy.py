@@ -2,7 +2,9 @@ from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
 from datetime import datetime
 import json
+from math import ceil
 import pandas as pd
+import re
 import requests
 from fake_useragent import UserAgent
 
@@ -22,7 +24,7 @@ class ETLStrategy(ABC):
 
 
 class OtoMotoETL(ETLStrategy):
-    def _get_url(self, brand, model, page=1):
+    def _get_url(self, brand, model, page=1) -> str:
         '''
         Return url in 4th diffrent configurations.
         If given: 
@@ -47,7 +49,7 @@ class OtoMotoETL(ETLStrategy):
         
         return base_url + f'?page={page}'
 
-    def _get_headers(self):
+    def _get_headers(self) -> dict:
         '''
         Prepare headers with random useragent for scraping 
         Check "Custom Headers"-> https://requests.readthedocs.io/en/latest/user/quickstart/ 
@@ -64,7 +66,24 @@ class OtoMotoETL(ETLStrategy):
         }
         return headers
 
-    def _get_data_with_key(self, json_object, key):
+    def _get_soup(self, url, headers) -> BeautifulSoup:
+        """
+        Fetches the HTML content from the given URL and parses it using BeautifulSoup.
+        :param url: str, the URL to fetch.
+        :param headers: dict, the headers to include in the request.
+        :return: BeautifulSoup, parsed HTML content if successful, otherwise None.
+        """
+        # Send a GET request to the URL
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code != 200:
+            print(f"Failed to fetch page: {response.status_code}")
+            return None
+        
+        # Parse the HTML content using BeautifulSoup
+        return BeautifulSoup(response.content, 'html.parser')
+
+    def _get_data_with_key(self, json_object, key) -> dict:
         '''
         Json_object parser, depends of key.
         '''
@@ -89,7 +108,7 @@ class OtoMotoETL(ETLStrategy):
             # Handle JSON decoding errors
             raise ValueError(f"Error decoding JSON data for key '{key}': {e}")
 
-    def _create_row_from_dict(self, input_dict):
+    def _create_row_from_dict(self, input_dict) -> dict:
         """
         Transforms an input dictionary into a structured row dictionary.
         :param input_dict: input data (dict) containing a 'node' key with relevant details.
@@ -131,7 +150,7 @@ class OtoMotoETL(ETLStrategy):
             print(f"Error processing input_dict: {e}")
             return {}
 
-    def _create_df_from_row(self, df, row):
+    def _create_df_from_row(self, df, row) -> pd.DataFrame:
         '''
         Add a new row to DataFrame. If DataFrame doesnt exist create it.
         :param df: input DataFrame or None
@@ -161,53 +180,66 @@ class OtoMotoETL(ETLStrategy):
                 raise ValueError
         return df
 
+    def _find_page_num(self, text:str) -> int:
+        """
+        Extracts the number of ads from the given text. Raises ValueError if not found.
+        """
+        match = re.search(r'Liczba ogłoszeń:\s*<!--\s*-->\s*<b>([\d\s]+)</b>', text)
+        if not match:
+            raise ValueError("Could not find the number of ads in the given text.")
+        
+        ad_num = int(match.group(1).replace(" ", ""))  # Remove spaces and convert to int
+        return ceil(ad_num/32) # 32 ads on page
+
     def extarct(self, brand:str, model:str):
         # Code to scrape data from otomoto.pl
 
         # Prepare prerequisits
         headers = self._get_headers()
         url = self._get_url(brand, model)
-
-        # Send a GET request to the URL
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code != 200:
-            print(f"Failed to fetch page: {response.status_code}")
-            return
-        
-        # Parse the HTML content using BeautifulSoup
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Find all car listings
-        listings = soup.find(id='__NEXT_DATA__')
-
-        # Check if listings were found
-        if not listings:
-            print("No car listings found. The website structure may have changed.")
-            return
-        
-        # Extract data from listing
-        json_object = json.loads(str(listings.text))
-
-        last_key = list(json_object.get('props', {}).get('pageProps', {}).get('urqlState', {}).keys())[-1]
-        first_key = list(json_object.get('props', {}).get('pageProps', {}).get('urqlState', {}).keys())[0]
-
-        with open('test.txt', 'w') as f:
-            f.write(str(json_object))
-
-        try:
-            final_data = self._get_data_with_key(json_object, last_key)
-        except KeyError:
-            try:
-                final_data = self._get_data_with_key(json_object, first_key)
-            except:
-                print("No car data in here :(")
-
-        # Save extracted data to df
         df = None
-        for input_data in final_data:
-            row = self._create_row_from_dict(input_data)
-            df = self._create_df_from_row(df, row)
+
+        # Get init soup and number of pages
+        soup = self._get_soup(url, headers)
+        num_of_pages = self._find_page_num(str(soup))
+
+        # Loop through pages
+        for page_num in range(1, num_of_pages+1):
+            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extract data for: {brand} {model}. Page number: {page_num}")
+
+            if page_num > 1: # If more than 1 page
+                url = self._get_url(brand, model, page=page_num)
+                soup = self._get_soup(url, headers)
+
+            # Find all car listings
+            listings = soup.find(id='__NEXT_DATA__')
+
+            # Check if listings were found
+            if not listings:
+                print("No car listings found. The website structure may have changed.")
+                return
+            
+            # Extract data from listing
+            json_object = json.loads(str(listings.text))
+
+            last_key = list(json_object.get('props', {}).get('pageProps', {}).get('urqlState', {}).keys())[-1]
+            first_key = list(json_object.get('props', {}).get('pageProps', {}).get('urqlState', {}).keys())[0]
+
+            with open('test.txt', 'w') as f:
+                f.write(str(json_object))
+
+            try:
+                final_data = self._get_data_with_key(json_object, last_key)
+            except KeyError:
+                try:
+                    final_data = self._get_data_with_key(json_object, first_key)
+                except:
+                    print("No car data in here :(")
+
+            # Save extracted data to df
+            for input_data in final_data:
+                row = self._create_row_from_dict(input_data)
+                df = self._create_df_from_row(df, row)
 
         return df
     
@@ -226,7 +258,7 @@ class OtoMotoETL(ETLStrategy):
         return
     
 
-class ETLContext:
+class ContextManager:
     def __init__(self, strategy: ETLStrategy):
         self.strategy = strategy
 
@@ -240,8 +272,5 @@ if __name__=='__main__':
     
     from IPython.display import display
     etl = OtoMotoETL()
-    df = etl.extarct(brand='porsche', model='cayenne')
-    display(df.dtypes)
-    df = etl._set_dtype(df, 'year', 'int')
-    display(df.dtypes)
-
+    df = etl.extarct(brand='opel', model='antara')
+    display(df)
