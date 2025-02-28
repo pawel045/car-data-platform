@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from math import ceil
 import pandas as pd
@@ -41,13 +41,13 @@ class OtoMotoETL(ETLStrategy):
         base_url = f"https://www.otomoto.pl/osobowe"
 
         if brand and model:
-            return f"{base_url}/{brand}/{model}?page={page}" 
+            return f"{base_url}/{brand}/{model}?search%5Border%5D=created_at_first%3Adesc&page={page}" 
         if brand:
-            return f"{base_url}/{brand}?page={page}"
+            return f"{base_url}/{brand}?search%5Border%5D=created_at_first%3Adesc&page={page}"
         if model:
-            return f"{base_url}/{model}?page={page}"
+            return f"{base_url}/{model}?search%5Border%5D=created_at_first%3Adesc&page={page}"
         
-        return base_url + f'?page={page}'
+        return base_url + f'?search%5Border%5D=created_at_first%3Adesc&page={page}'
 
     def _get_headers(self) -> dict:
         '''
@@ -191,7 +191,18 @@ class OtoMotoETL(ETLStrategy):
         ad_num = int(match.group(1).replace(" ", ""))  # Remove spaces and convert to int
         return ceil(ad_num/32) # 32 ads on page
 
-    def extarct(self, brand:str, model:str):
+    def _is_stop_date_greater_than_creation_date(self, creation_date:datetime, stop_date:datetime) -> bool:
+        return stop_date > creation_date
+
+    def _n_days_ago(n: int) -> datetime:
+        assert n>0, 'n must be a positive number'
+        
+        n_days_ago = datetime.now() - timedelta(days=7)
+        return n_days_ago.replace(hour=0, minute=0, second=0, microsecond=0)
+         
+
+
+    def extarct(self, brand:str, model:str, days_ago:int):
         # Code to scrape data from otomoto.pl
 
         # Prepare prerequisits
@@ -239,6 +250,9 @@ class OtoMotoETL(ETLStrategy):
             # Save extracted data to df
             for input_data in final_data:
                 row = self._create_row_from_dict(input_data)
+
+                # Check if 
+
                 df = self._create_df_from_row(df, row)
 
         return df
