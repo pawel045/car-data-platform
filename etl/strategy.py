@@ -112,7 +112,7 @@ class OtoMotoETL(ETLStrategy):
         """
         Transforms an input dictionary into a structured row dictionary.
         :param input_dict: input data (dict) containing a 'node' key with relevant details.
-        :return row: a flattened dictionary with extracted and mapped fields.
+        :return row, creation_date: a flattened dictionary with extracted and mapped fields and just a creation date.
         """
         try:
             node_dict = input_dict.get('node', {})
@@ -143,7 +143,7 @@ class OtoMotoETL(ETLStrategy):
                 if key:  # Only add valid keys
                     row[key] = value
 
-            return row
+            return row, row['created_date']
 
         except Exception as e:
             # Log the error or handle it appropriately
@@ -163,23 +163,6 @@ class OtoMotoETL(ETLStrategy):
         
         return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
 
-    def _set_dtype(self, df:pd.DataFrame, col:str, dtype:str):
-        '''
-        Change dtype in column's DataFrame. 
-        If dtype is numeric but value in column is not numeric - change to NaN.
-        :param df:
-        :param col: str columna name of df
-        :param dtype: accroding to https://pandas.pydata.org/docs/user_guide/basics.html#basics-dtypes
-        '''
-        try:
-            df.astype({col: dtype})
-        except ValueError:
-            if dtype in ['int', 'float']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            else: 
-                raise ValueError
-        return df
-
     def _find_page_num(self, text:str) -> int:
         """
         Extracts the number of ads from the given text. Raises ValueError if not found.
@@ -194,16 +177,26 @@ class OtoMotoETL(ETLStrategy):
     def _is_stop_date_greater_than_creation_date(self, creation_date:datetime, stop_date:datetime) -> bool:
         return stop_date > creation_date
 
-    def _n_days_ago(n: int) -> datetime:
-        assert n>0, 'n must be a positive number'
-        
-        n_days_ago = datetime.now() - timedelta(days=7)
+    def _n_days_ago(self, n_days: int) -> datetime:
+        assert n_days>0, 'n_days must be a positive number'
+
+        n_days_ago = datetime.now() - timedelta(days=n_days)
         return n_days_ago.replace(hour=0, minute=0, second=0, microsecond=0)
          
-
-
-    def extarct(self, brand:str, model:str, days_ago:int):
+    def extarct(self, **kwargs) -> pd.DataFrame:
         # Code to scrape data from otomoto.pl
+        assert 'brand' in kwargs, 'There is no definition of brand (if dont wanna brand, set as empty string).'
+        assert 'model' in kwargs, 'There is no definition of model (if dont wanna model, set as empty string).'
+        assert 'days_ago' in kwargs, 'There is no definition of days_ago (if dont wanna days_ago, set as -1).'
+
+        brand = kwargs['brand']
+        model = kwargs['model']
+        days_ago = kwargs['days_ago']
+
+        # decide if get all data or limited by date
+        stop_date=None
+        if days_ago>=0:
+            stop_date = self._n_days_ago(days_ago)
 
         # Prepare prerequisits
         headers = self._get_headers()
@@ -216,7 +209,7 @@ class OtoMotoETL(ETLStrategy):
 
         # Loop through pages
         for page_num in range(1, num_of_pages+1):
-            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extract data for: {brand} {model}. Page number: {page_num}")
+            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting data of: {brand.title()} {model.title()}. Page number: {page_num}")
 
             if page_num > 1: # If more than 1 page
                 url = self._get_url(brand, model, page=page_num)
@@ -249,9 +242,12 @@ class OtoMotoETL(ETLStrategy):
 
             # Save extracted data to df
             for input_data in final_data:
-                row = self._create_row_from_dict(input_data)
+                row, creation_date = self._create_row_from_dict(input_data)
 
-                # Check if 
+                # Stop for-loop if stop_date>creation_date
+                if stop_date:
+                    if self._is_stop_date_greater_than_creation_date(creation_date, stop_date):
+                        return df
 
                 df = self._create_df_from_row(df, row)
 
@@ -261,13 +257,52 @@ class OtoMotoETL(ETLStrategy):
         # code to tranform data compliant schema
         '''
         * set datatypes: _set_dtype
-        * create new rows e.g. Car_year, price_pln, 
+        * create new rows e.g. Car_year, price_pln
         * solve NaN
         '''
 
-        return
+        print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Transforming data.")
+
+        # SET DTYPES PROPERLY
+        col_dtype = {
+            'title': 'str',  
+            'short_description': 'str',
+            'price': 'int',
+            'currency': 'str',
+            'cepik_verified': 'bool',
+            'make': 'str',
+            'fuel_type': 'str',
+            'gearbox': 'str',
+            'country_origin': 'str',
+            'mileage': 'int',
+            'engine_capacity': 'int',
+            'engine_power': 'int',
+            'model': 'str',
+            'version': 'str',
+            'year': 'int',
+        }
+        df = df.astype(col_dtype)
+        df[['scrape_date', 'created_date']] = df[['scrape_date', 'created_date']].apply({
+            'scrape_date': pd.to_datetime,
+            'created_date': pd.to_datetime
+        })
+        
+        # RENAME COLUMNS
+        mapper = {
+            'make': 'brand'
+        }
+        df.rename(mapper, axis=1, inplace=True)
+
+        # CREATE ROWS
+        df['car_age'] = df['scrape_date'].dt.year - df['year']
+
+        return df
 
     def load(self, data):
+        print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Loading data.")
+        # save loccaly as csv, for now
+        data.to_csv('extracted_data.csv')
+        
         # code to load transformed data to bigquery
         return
     
@@ -275,16 +310,33 @@ class OtoMotoETL(ETLStrategy):
 class ContextManager:
     def __init__(self, strategy: ETLStrategy):
         self.strategy = strategy
+        self.params = {}
+
+    def set_params(self, **kwargs):
+        for key, value in kwargs.items():
+            self.params[key] = value
 
     def run(self):
-        data = self.strategy.extarct()
-        transformed_data = self.strategy(data)
-        self.strategy(transformed_data)
+        try:
+            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Starting process: {self.strategy.__class__.__name__}")
+            data = self.strategy.extarct(**self.params)
+            transformed_data = self.strategy.transform(data)
+            self.strategy.load(transformed_data)
+            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] {self.strategy.__class__.__name__} process completed.")
+        except Exception as err:
+            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Process interrupted: {err}")
+
+
 
 
 if __name__=='__main__':
-    
-    from IPython.display import display
+    params = {
+        'brand': 'porsche',
+        'model': 'cayenne',
+        'days_ago': 1,
+    }
+
     etl = OtoMotoETL()
-    df = etl.extarct(brand='opel', model='antara')
-    display(df)
+    context = ContextManager(etl)
+    context.set_params(**params)
+    context.run()
