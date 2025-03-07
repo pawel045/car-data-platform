@@ -1,8 +1,12 @@
 from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+from google.cloud import bigquery
+from google.oauth2 import service_account
 import json
 from math import ceil
+import os
 import pandas as pd
 import re
 import requests
@@ -24,6 +28,21 @@ class ETLStrategy(ABC):
 
 
 class OtoMotoETL(ETLStrategy):
+    def __init__(self):
+        # Retrieve the values from environment variables
+        load_dotenv()
+        project_id = os.getenv('PROJECT_ID')
+        dataset_id = os.getenv('DATASET_ID')
+        table_id = os.getenv('TABLE_ID')
+        key_path = os.getenv('SERVICE_ACCOUNT_KEY_PATH')
+
+        # Get credentials
+        credentials = service_account.Credentials.from_service_account_file(key_path)
+
+        # Create BigQuery client and table
+        self.client = bigquery.Client(credentials=credentials, project=project_id)
+        self.table_ref = f"{project_id}.{dataset_id}.{table_id}"
+
     def _get_url(self, brand, model, page=1) -> str:
         '''
         Return url in 4th diffrent configurations.
@@ -182,7 +201,20 @@ class OtoMotoETL(ETLStrategy):
 
         n_days_ago = datetime.now() - timedelta(days=n_days)
         return n_days_ago.replace(hour=0, minute=0, second=0, microsecond=0)
-         
+
+    def _get_max_id(self) -> int:
+        # Run the query
+        query = f"SELECT MAX(id) AS max_value FROM `{self.table_ref}`"
+        query_job  = self.client.query(query)
+
+        result = query_job.result()
+        for row in result:
+            max_value = row.max_value  # Access the max_value column
+        
+        if not max_value:
+            return -1
+        return max_value
+
     def extarct(self, **kwargs) -> pd.DataFrame:
         # Code to scrape data from otomoto.pl
         assert 'brand' in kwargs, 'There is no definition of brand (if dont wanna brand, set as empty string).'
@@ -259,26 +291,26 @@ class OtoMotoETL(ETLStrategy):
         * set datatypes: _set_dtype
         * create new rows e.g. Car_year, price_pln
         * solve NaN
+        * assign id number
         '''
 
         print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Transforming data.")
-
         # SET DTYPES PROPERLY
         col_dtype = {
-            'title': 'str',  
-            'short_description': 'str',
+            # 'title': 'str',  
+            # 'short_description': 'str',
             'price': 'int',
-            'currency': 'str',
+            # 'currency': 'str',
             'cepik_verified': 'bool',
-            'make': 'str',
-            'fuel_type': 'str',
-            'gearbox': 'str',
-            'country_origin': 'str',
+            # 'make': 'str',
+            # 'fuel_type': 'str',
+            # 'gearbox': 'str',
+            # 'country_origin': 'str',
             'mileage': 'int',
             'engine_capacity': 'int',
             'engine_power': 'int',
-            'model': 'str',
-            'version': 'str',
+            # 'model': 'str',
+            # 'version': 'str',
             'year': 'int',
         }
         df = df.astype(col_dtype)
@@ -298,14 +330,18 @@ class OtoMotoETL(ETLStrategy):
 
         return df
 
-    def load(self, data):
+    def load(self, df):
         print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Loading data.")
-        # save loccaly as csv, for now
-        data.to_csv('extracted_data.csv')
-        
-        # code to load transformed data to bigquery
-        return
-    
+
+        # Set up configuration to connect with BigQuery
+        job_config = bigquery.LoadJobConfig(
+            write_disposition="WRITE_TRUNCATE",  # Use 'WRITE_APPEND' if you want to append data
+            autodetect=True
+        )
+        # Upload the DataFrame to BigQuery
+        job = self.client.load_table_from_dataframe(df, self.table_ref, job_config=job_config)
+        job.result()
+   
 
 class ContextManager:
     def __init__(self, strategy: ETLStrategy):
@@ -317,23 +353,23 @@ class ContextManager:
             self.params[key] = value
 
     def run(self):
-        try:
-            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Starting process: {self.strategy.__class__.__name__}")
-            data = self.strategy.extarct(**self.params)
-            transformed_data = self.strategy.transform(data)
-            self.strategy.load(transformed_data)
-            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] {self.strategy.__class__.__name__} process completed.")
-        except Exception as err:
-            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Process interrupted: {err}")
+        # try:
+        print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Starting process: {self.strategy.__class__.__name__}")
+        data = self.strategy.extarct(**self.params)
+        transformed_data = self.strategy.transform(data)
+        self.strategy.load(transformed_data)
+        print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] {self.strategy.__class__.__name__} process completed.")
+        # except Exception as err:
+        #     print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Process interrupted: {err}")
 
 
 
 
 if __name__=='__main__':
     params = {
-        'brand': 'porsche',
-        'model': 'cayenne',
-        'days_ago': 1,
+        'brand': 'buick',
+        'model': 'encore',
+        'days_ago': -1,
     }
 
     etl = OtoMotoETL()
