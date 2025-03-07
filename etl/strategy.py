@@ -297,20 +297,11 @@ class OtoMotoETL(ETLStrategy):
         print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Transforming data.")
         # SET DTYPES PROPERLY
         col_dtype = {
-            # 'title': 'str',  
-            # 'short_description': 'str',
             'price': 'int',
-            # 'currency': 'str',
             'cepik_verified': 'bool',
-            # 'make': 'str',
-            # 'fuel_type': 'str',
-            # 'gearbox': 'str',
-            # 'country_origin': 'str',
             'mileage': 'int',
             'engine_capacity': 'int',
             'engine_power': 'int',
-            # 'model': 'str',
-            # 'version': 'str',
             'year': 'int',
         }
         df = df.astype(col_dtype)
@@ -330,12 +321,13 @@ class OtoMotoETL(ETLStrategy):
 
         return df
 
-    def load(self, df):
+    def load(self, df, how_add='append'):
+        assert how_add.upper()=='APPEND' or how_add.upper()=='TRUNCATE','Variable how_add can be only "append" or "truncate"'
         print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Loading data.")
 
         # Set up configuration to connect with BigQuery
         job_config = bigquery.LoadJobConfig(
-            write_disposition="WRITE_TRUNCATE",  # Use 'WRITE_APPEND' if you want to append data
+            write_disposition=f"WRITE_{how_add}",  # Use 'WRITE_APPEND' if you want to append data
             autodetect=True
         )
         # Upload the DataFrame to BigQuery
@@ -353,14 +345,14 @@ class ContextManager:
             self.params[key] = value
 
     def run(self):
-        # try:
-        print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Starting process: {self.strategy.__class__.__name__}")
-        data = self.strategy.extarct(**self.params)
-        transformed_data = self.strategy.transform(data)
-        self.strategy.load(transformed_data)
-        print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] {self.strategy.__class__.__name__} process completed.")
-        # except Exception as err:
-        #     print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Process interrupted: {err}")
+        try:
+            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Starting process: {self.strategy.__class__.__name__}")
+            data = self.strategy.extarct(**self.params)
+            transformed_data = self.strategy.transform(data)
+            self.strategy.load(transformed_data,how_add='truncate')
+            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] {self.strategy.__class__.__name__} process completed.")
+        except Exception as err:
+            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Process interrupted: {err}")
 
 
 
