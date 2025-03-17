@@ -8,9 +8,11 @@ import json
 from math import ceil
 import os
 import pandas as pd
+from random import randint
 import re
 import requests
 from fake_useragent import UserAgent
+from time import sleep
 
 
 class ETLStrategy(ABC):
@@ -217,13 +219,22 @@ class OtoMotoETL(ETLStrategy):
 
     def extarct(self, **kwargs) -> pd.DataFrame:
         # Code to scrape data from otomoto.pl
-        assert 'brand' in kwargs, 'There is no definition of brand (if dont wanna brand, set as empty string).'
-        assert 'model' in kwargs, 'There is no definition of model (if dont wanna model, set as empty string).'
-        assert 'days_ago' in kwargs, 'There is no definition of days_ago (if dont wanna days_ago, set as -1).'
 
-        brand = kwargs['brand']
-        model = kwargs['model']
-        days_ago = kwargs['days_ago']
+        # external params (created at context menager)
+        brand = kwargs.get('brand', '')
+        model = kwargs.get('model', '')
+        days_ago = kwargs.get('days_ago', -1)
+        delay_scraping = kwargs.get('delay_scraping', False)
+
+        # internal params (created in run_etl)
+        page_num_start = kwargs['page_num_start'] # include
+        page_num_stop = kwargs['page_num_stop'] # include
+        headers = kwargs['headers']
+
+        # decide if get all data or limited by date
+        stop_date=None
+        if days_ago>=0:
+            stop_date = self._n_days_ago(days_ago)
 
         # decide if get all data or limited by date
         stop_date=None
@@ -237,55 +248,57 @@ class OtoMotoETL(ETLStrategy):
 
         # Get init soup and number of pages
         soup = self._get_soup(url, headers)
-        num_of_pages = self._find_page_num(str(soup))
 
         # Loop through pages
-        for page_num in range(1, num_of_pages+1):
-            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting data of: {brand.title()} {model.title()}. Page number: {page_num}")
+        for page_num in range(page_num_start, page_num_stop+1):
+            try:
+                print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting data of: {brand.title()} {model.title()}. Page number: {page_num}")
 
-            if page_num > 1: # If more than 1 page
+                # Pretend human
+                if delay_scraping:
+                    sleep(randint(1,5))
+
                 url = self._get_url(brand, model, page=page_num)
                 soup = self._get_soup(url, headers)
 
-            # Find all car listings
-            listings = soup.find(id='__NEXT_DATA__')
+                # Find all car listings
+                listings = soup.find(id='__NEXT_DATA__')
 
-            # Check if listings were found
-            if not listings:
-                print("No car listings found. The website structure may have changed.")
-                return
-            
-            # Extract data from listing
-            json_object = json.loads(str(listings.text))
+                # Check if listings were found
+                if not listings:
+                    print("No car listings found. The website structure may have changed.")
+                    return
+                
+                # Extract data from listing
+                json_object = json.loads(str(listings.text))
 
-            last_key = list(json_object.get('props', {}).get('pageProps', {}).get('urqlState', {}).keys())[-1]
-            first_key = list(json_object.get('props', {}).get('pageProps', {}).get('urqlState', {}).keys())[0]
+                last_key = list(json_object.get('props', {}).get('pageProps', {}).get('urqlState', {}).keys())[-1]
+                first_key = list(json_object.get('props', {}).get('pageProps', {}).get('urqlState', {}).keys())[0]
 
-            with open('test.txt', 'w') as f:
-                f.write(str(json_object))
-
-            try:
-                final_data = self._get_data_with_key(json_object, last_key)
-            except KeyError:
                 try:
-                    final_data = self._get_data_with_key(json_object, first_key)
-                except:
-                    print("No car data in here :(")
+                    final_data = self._get_data_with_key(json_object, last_key)
+                except KeyError:
+                    try:
+                        final_data = self._get_data_with_key(json_object, first_key)
+                    except:
+                        print("No car data in here :(")
 
-            # Save extracted data to df
-            for input_data in final_data:
-                row, creation_date = self._create_row_from_dict(input_data)
+                # Save extracted data to df
+                for input_data in final_data:
+                    row, creation_date = self._create_row_from_dict(input_data)
 
-                # Stop for-loop if stop_date>creation_date
-                if stop_date:
-                    if self._is_stop_date_greater_than_creation_date(creation_date, stop_date):
-                        return df
+                    # Stop for-loop if stop_date>creation_date
+                    if stop_date:
+                        if self._is_stop_date_greater_than_creation_date(creation_date, stop_date):
+                            return df
 
-                df = self._create_df_from_row(df, row)
-
+                    df = self._create_df_from_row(df, row)
+            except:
+                print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting of page {page_num} failed.")
+                continue
         return df
     
-    def transform(self, df):
+    def transform(self, df: pd.DataFrame):
         # code to tranform data compliant schema
         '''
         * set datatypes: _set_dtype
@@ -293,7 +306,6 @@ class OtoMotoETL(ETLStrategy):
         * solve NaN
         * assign id number
         '''
-
         print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Transforming data.")
         # SET DTYPES PROPERLY
         col_dtype = {
@@ -304,6 +316,7 @@ class OtoMotoETL(ETLStrategy):
             'engine_power': 'int',
             'year': 'int',
         }
+        df[['price','mileage','engine_capacity','engine_power','year']] = df[['price','mileage','engine_capacity','engine_power','year']].fillna(-1)
         df = df.astype(col_dtype)
         df[['scrape_date', 'created_date']] = df[['scrape_date', 'created_date']].apply({
             'scrape_date': pd.to_datetime,
@@ -334,6 +347,36 @@ class OtoMotoETL(ETLStrategy):
         job = self.client.load_table_from_dataframe(df, self.table_ref, job_config=job_config)
         job.result()
    
+    def run_etl(self, **kwargs):
+        '''
+        ETL process self.extract -> self.transform -> self.load in loop for every 100 pages
+        **kwargs:
+            'brand': str, e.g. opel
+            'model': str, e.g. astra
+            'days_ago: int, how many days before wants to scrape
+            'delay_scraping': bool, if true delay scraping every page by sleep(randint(1,5))
+            'how_add': str, append/truncate, if append add to existing Table, if truncate - drop rows and add to empty table
+        '''
+        # Prerequisites
+        kwargs['headers'] = self._get_headers()
+        url = self._get_url(kwargs['brand'], kwargs['model'])
+        soup = self._get_soup(url, kwargs['headers'])
+        num_page = self._find_page_num(str(soup))
+        iters = ceil(num_page/100) 
+        
+        # Save results of scraping every 100 pages
+        for i in range(iters):
+            kwargs['page_num_start'] = 100*i + 1
+            kwargs['page_num_stop'] = 100*i + 100
+            if i == iters-1:
+                kwargs['page_num_stop'] = num_page
+
+            # ETL process
+            data = self.extarct(**kwargs)
+            transformed_data = self.transform(data)
+            how_add = kwargs.get('how_add', 'append')
+            self.load(transformed_data,how_add=how_add)
+
 
 class ContextManager:
     def __init__(self, strategy: ETLStrategy):
@@ -347,21 +390,21 @@ class ContextManager:
     def run(self):
         try:
             print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Starting process: {self.strategy.__class__.__name__}")
-            data = self.strategy.extarct(**self.params)
-            transformed_data = self.strategy.transform(data)
-            self.strategy.load(transformed_data,how_add='truncate')
+            
+            self.strategy.run_etl(**self.params)
+
             print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] {self.strategy.__class__.__name__} process completed.")
         except Exception as err:
             print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Process interrupted: {err}")
 
 
-
-
 if __name__=='__main__':
     params = {
-        'brand': 'buick',
-        'model': 'encore',
-        'days_ago': -1,
+        # 'brand': 'opel',
+        # 'model': 'meriva',
+        # 'days_ago': 1,
+        'delay_scraping': True,
+        'how_add': 'append' # append/truncate
     }
 
     etl = OtoMotoETL()
