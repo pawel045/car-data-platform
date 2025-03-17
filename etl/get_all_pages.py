@@ -1,8 +1,7 @@
 from strategy import OtoMotoETL, ContextManager
 
 params = {
-    'days_ago': 1,
-    'delay_scraping': True,
+    'delay_scraping': False,
     'how_add': 'append'
 }
 
