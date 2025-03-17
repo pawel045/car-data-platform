@@ -1,8 +1,11 @@
-from dotenv import load_dotenv
-import os
+from strategy import OtoMotoETL, ContextManager
 
-load_dotenv()
+params = {
+    'delay_scraping': False,
+    'how_add': 'append'
+}
 
-db_host = os.getenv('DB_HOST')
-print(db_host)
-
+etl = OtoMotoETL()
+context = ContextManager(etl)
+context.set_params(**params)
+context.run()

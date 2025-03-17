@@ -400,9 +400,9 @@ class ContextManager:
 
 if __name__=='__main__':
     params = {
-        # 'brand': 'opel',
-        # 'model': 'meriva',
-        # 'days_ago': 1,
+        'brand': 'opel',
+        'model': 'meriva',
+        'days_ago': 1,
         'delay_scraping': True,
         'how_add': 'append' # append/truncate
     }
