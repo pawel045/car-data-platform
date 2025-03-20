@@ -338,23 +338,8 @@ class OtoMotoETL(ETLStrategy):
         '''
         print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Transforming data.")
 
-        # VALIDATE DATAFRAME - LEAVE ONLY REQUIRED COLUMNS
-        init_expected_columns = ["scrape_date","created_date","title","short_description",
-                            "price","currency","cepik_verified","make","fuel_type",
-                            "gearbox","country_origin","mileage","engine_capacity",
-                            "engine_power","model","year","version"]
-        columns_info = self._validate_dataframe(df,init_expected_columns)
-        if len(columns_info["missing_columns"]) == 0:
-            for col in columns_info["missing_columns"]:
-                df[col] = np.nan
-        if not columns_info['correct_order']:
-            df = df[init_expected_columns]
-
         # REMOVE space FROM STR LOOKLIKE INT
-        df[['price', 'mileage', 'engine_capacity', 'engine_power', 'year']] = \
-            df[['price', 'mileage', 'engine_capacity', 'engine_power', 'year']] \
-            .apply(lambda x: x.str.replace(' ', ''))
-
+        df['engine_capacity'] = df['engine_capacity'].str.replace(' ', '')
 
         # SET DTYPES PROPERLY
         col_dtype = {
@@ -370,6 +355,18 @@ class OtoMotoETL(ETLStrategy):
             'scrape_date': pd.to_datetime,
             'created_date': pd.to_datetime})
         
+        # VALIDATE DATAFRAME - LEAVE ONLY REQUIRED COLUMNS
+        init_expected_columns = ["scrape_date","created_date","title","short_description",
+                                "price","currency","cepik_verified","make","fuel_type",
+                                "gearbox","country_origin","mileage","engine_capacity",
+                                "engine_power","model","year","version"]
+        columns_info = self._validate_dataframe(df,init_expected_columns)
+        if len(columns_info["missing_columns"]) == 0:
+            for col in columns_info["missing_columns"]:
+                df[col] = np.nan
+        if not columns_info['correct_order']:
+            df = df[init_expected_columns]
+
         # RENAME COLUMNS
         mapper = {
             'make': 'brand'}
