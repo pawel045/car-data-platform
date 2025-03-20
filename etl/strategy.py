@@ -6,6 +6,7 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 import json
 from math import ceil
+import numpy as np
 import os
 import pandas as pd
 from random import randint
@@ -217,6 +218,35 @@ class OtoMotoETL(ETLStrategy):
             return -1
         return max_value
 
+    def _validate_dataframe(self, df, expected_columns):
+        '''
+        Dataframe validation - check if expected columns are in df.
+        :param df: pd.DataFrame to validate,
+        :param expected_columns: list,
+        :return: dict
+            {
+            "missing_columns": list,
+            "extra_columns": list,
+            "correct_order": bool
+            }
+        '''
+
+
+        actual_columns = df.columns.tolist()
+
+        # Check if all expected columns are present
+        missing_columns = [col for col in expected_columns if col not in actual_columns]
+        extra_columns = [col for col in actual_columns if col not in expected_columns]
+        
+        # Check if columns are in the correct order
+        correct_order = actual_columns == expected_columns
+
+        return {
+            "missing_columns": missing_columns,
+            "extra_columns": extra_columns,
+            "correct_order": correct_order
+        }
+
     def extarct(self, **kwargs) -> pd.DataFrame:
         # Code to scrape data from otomoto.pl
 
@@ -301,12 +331,25 @@ class OtoMotoETL(ETLStrategy):
     def transform(self, df: pd.DataFrame):
         # code to tranform data compliant schema
         '''
-        * set datatypes: _set_dtype
+        * solve missing columns
+        * set datatypes
         * create new rows e.g. Car_year, price_pln
-        * solve NaN
         * assign id number
         '''
         print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Transforming data.")
+
+        # VALIDATE DATAFRAME - LEAVE ONLY REQUIRED COLUMNS
+        init_expected_columns = ["scrape_date","created_date","title","short_description",
+                            "price","currency","cepik_verified","make","fuel_type",
+                            "gearbox","country_origin","mileage","engine_capacity",
+                            "engine_power","model","year","version"]
+        columns_info = self._validate_dataframe(df,init_expected_columns)
+        if len(columns_info["missing_columns"]) == 0:
+            for col in columns_info["missing_columns"]:
+                df[col] = np.nan
+        if not columns_info['correct_order']:
+            df = df[init_expected_columns]
+
         # SET DTYPES PROPERLY
         col_dtype = {
             'price': 'int',
@@ -314,19 +357,16 @@ class OtoMotoETL(ETLStrategy):
             'mileage': 'int',
             'engine_capacity': 'int',
             'engine_power': 'int',
-            'year': 'int',
-        }
+            'year': 'int'}
         df[['price','mileage','engine_capacity','engine_power','year']] = df[['price','mileage','engine_capacity','engine_power','year']].fillna(-1)
         df = df.astype(col_dtype)
         df[['scrape_date', 'created_date']] = df[['scrape_date', 'created_date']].apply({
             'scrape_date': pd.to_datetime,
-            'created_date': pd.to_datetime
-        })
+            'created_date': pd.to_datetime})
         
         # RENAME COLUMNS
         mapper = {
-            'make': 'brand'
-        }
+            'make': 'brand'}
         df.rename(mapper, axis=1, inplace=True)
 
         # CREATE ROWS
