@@ -350,6 +350,12 @@ class OtoMotoETL(ETLStrategy):
         if not columns_info['correct_order']:
             df = df[init_expected_columns]
 
+        # REMOVE space FROM STR LOOKLIKE INT
+        df[['price', 'mileage', 'engine_capacity', 'engine_power', 'year']] = \
+            df[['price', 'mileage', 'engine_capacity', 'engine_power', 'year']] \
+            .apply(lambda x: x.str.replace(' ', ''))
+
+
         # SET DTYPES PROPERLY
         col_dtype = {
             'price': 'int',
