@@ -247,7 +247,7 @@ class OtoMotoETL(ETLStrategy):
             "correct_order": correct_order
         }
 
-    def extarct(self, **kwargs) -> pd.DataFrame:
+    def extarct(self, **kwargs):
         # Code to scrape data from otomoto.pl
 
         # external params (created at context menager)
@@ -262,6 +262,7 @@ class OtoMotoETL(ETLStrategy):
         headers = kwargs['headers']
 
         # decide if get all data or limited by date
+        forced_stop = False
         stop_date=None
         if days_ago>=0:
             stop_date = self._n_days_ago(days_ago)
@@ -320,13 +321,14 @@ class OtoMotoETL(ETLStrategy):
                     # Stop for-loop if stop_date>creation_date
                     if stop_date:
                         if self._is_stop_date_greater_than_creation_date(creation_date, stop_date):
-                            return df
+                            forced_stop = True
+                            return df, forced_stop
 
                     df = self._create_df_from_row(df, row)
             except:
                 print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting of page {page_num} failed.")
                 continue
-        return df
+        return df, forced_stop
     
     def transform(self, df: pd.DataFrame):
         # code to tranform data compliant schema
@@ -340,6 +342,7 @@ class OtoMotoETL(ETLStrategy):
 
         # REMOVE space FROM STR LOOKLIKE INT
         df['engine_capacity'] = df['engine_capacity'].str.replace(' ', '')
+        df['engine_capacity'] = df['engine_capacity'].str.replace(',00', '')
 
         # SET DTYPES PROPERLY
         col_dtype = {
@@ -415,10 +418,13 @@ class OtoMotoETL(ETLStrategy):
                 kwargs['page_num_stop'] = num_page
 
             # ETL process
-            data = self.extarct(**kwargs)
+            data, forced_stop = self.extarct(**kwargs)
             transformed_data = self.transform(data)
             how_add = kwargs.get('how_add', 'append')
             self.load(transformed_data,how_add=how_add)
+
+            if forced_stop:
+                break
 
 
 class ContextManager:
