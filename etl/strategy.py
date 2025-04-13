@@ -421,7 +421,7 @@ class OtoMotoETL(ETLStrategy):
             data, forced_stop = self.extarct(**kwargs)
             transformed_data = self.transform(data)
             how_add = kwargs.get('how_add', 'append')
-            # self.load(transformed_data,how_add=how_add)
+            self.load(transformed_data,how_add=how_add)
 
             if forced_stop:
                 return
