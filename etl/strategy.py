@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from google.cloud import bigquery
 from google.oauth2 import service_account
 import json
+import logging
 from math import ceil
 import numpy as np
 import os
@@ -99,7 +100,7 @@ class OtoMotoETL(ETLStrategy):
         response = requests.get(url, headers=headers)
         
         if response.status_code != 200:
-            print(f"Failed to fetch page: {response.status_code}")
+            logging.info(f"Failed to fetch page: {response.status_code}")
             return None
         
         # Parse the HTML content using BeautifulSoup
@@ -169,7 +170,7 @@ class OtoMotoETL(ETLStrategy):
 
         except Exception as e:
             # Log the error or handle it appropriately
-            print(f"Error processing input_dict: {e}")
+            logging.error(f"Error processing input_dict: {e}")
             return {}
 
     def _create_df_from_row(self, df, row) -> pd.DataFrame:
@@ -283,7 +284,7 @@ class OtoMotoETL(ETLStrategy):
         # Loop through pages
         for page_num in range(page_num_start, page_num_stop+1):
             try:
-                print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting data of: {brand.title()} {model.title()}. Page number: {page_num}")
+                logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting data of: {brand.title()} {model.title()}. Page number: {page_num}")
 
                 # Pretend human
                 if delay_scraping:
@@ -297,7 +298,7 @@ class OtoMotoETL(ETLStrategy):
 
                 # Check if listings were found
                 if not listings:
-                    print("No car listings found. The website structure may have changed.")
+                    logging.info("No car listings found. The website structure may have changed.")
                     return
                 
                 # Extract data from listing
@@ -312,7 +313,7 @@ class OtoMotoETL(ETLStrategy):
                     try:
                         final_data = self._get_data_with_key(json_object, first_key)
                     except:
-                        print("No car data in here :(")
+                        logging.warning("No car data in here :(")
 
                 # Save extracted data to df
                 for input_data in final_data:
@@ -325,7 +326,7 @@ class OtoMotoETL(ETLStrategy):
 
                     df = self._create_df_from_row(df, row)
             except:
-                print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting of page {page_num} failed.")
+                logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting of page {page_num} failed.")
                 continue
         return df, forced_stop
     
@@ -337,7 +338,7 @@ class OtoMotoETL(ETLStrategy):
         * create new rows e.g. Car_year, price_pln
         * assign id number
         '''
-        print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Transforming data.")
+        logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Transforming data.")
 
         # REMOVE space FROM STR LOOKLIKE INT
         df['engine_capacity'] = df['engine_capacity'].str.replace(' ', '')
@@ -381,7 +382,7 @@ class OtoMotoETL(ETLStrategy):
 
     def load(self, df, how_add='append'):
         assert how_add.upper()=='APPEND' or how_add.upper()=='TRUNCATE','Variable how_add can be only "append" or "truncate"'
-        print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Loading data.")
+        logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Loading data.")
 
         # Set up configuration to connect with BigQuery
         job_config = bigquery.LoadJobConfig(
@@ -437,13 +438,13 @@ class ContextManager:
 
     def run(self):
         try:
-            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Starting process: {self.strategy.__class__.__name__}")
+            logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Starting process: {self.strategy.__class__.__name__}")
             
             self.strategy.run_etl(**self.params)
 
-            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] {self.strategy.__class__.__name__} process completed.")
+            logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] {self.strategy.__class__.__name__} process completed.")
         except Exception as err:
-            print(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Process interrupted: {err}")
+            logging.warning(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Process interrupted: {err}")
 
 
 if __name__=='__main__':
