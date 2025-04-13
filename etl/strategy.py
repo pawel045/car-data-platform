@@ -266,6 +266,7 @@ class OtoMotoETL(ETLStrategy):
         stop_date=None
         if days_ago>=0:
             stop_date = self._n_days_ago(days_ago)
+        print(stop_date)
 
         # decide if get all data or limited by date
         stop_date=None
@@ -317,7 +318,7 @@ class OtoMotoETL(ETLStrategy):
                 # Save extracted data to df
                 for input_data in final_data:
                     row, creation_date = self._create_row_from_dict(input_data)
-
+                    print(creation_date)
                     # Stop for-loop if stop_date>creation_date
                     if stop_date:
                         if self._is_stop_date_greater_than_creation_date(creation_date, stop_date):
@@ -421,10 +422,10 @@ class OtoMotoETL(ETLStrategy):
             data, forced_stop = self.extarct(**kwargs)
             transformed_data = self.transform(data)
             how_add = kwargs.get('how_add', 'append')
-            self.load(transformed_data,how_add=how_add)
+            # self.load(transformed_data,how_add=how_add)
 
             if forced_stop:
-                break
+                return
 
 
 class ContextManager:
@@ -449,10 +450,10 @@ class ContextManager:
 
 if __name__=='__main__':
     params = {
-        'brand': 'opel',
-        'model': 'meriva',
+        'brand': '',
+        'model': '',
         'days_ago': 1,
-        'delay_scraping': True,
+        'delay_scraping': False,
         'how_add': 'append' # append/truncate
     }
 
