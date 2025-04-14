@@ -13,9 +13,40 @@ import pandas as pd
 from random import randint
 import re
 import requests
+import sys
 from fake_useragent import UserAgent
 from time import sleep
 
+
+class Logger:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(Logger, cls).__new__(cls)
+            cls._instance._init_logger()
+        return cls._instance
+
+    def _init_logger(self):
+        self.logger = logging.getLogger("ETLLogger")
+        self.logger.setLevel(logging.DEBUG)
+
+        if not self.logger.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setLevel(logging.DEBUG)
+
+            formatter = logging.Formatter(
+                '%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+
+            handler.setFormatter(formatter)
+
+            self.logger.addHandler(handler)
+            self.logger.propagate = False
+
+    def get_logger(self):
+        return self.logger
 
 class ETLStrategy(ABC):
     @abstractmethod
@@ -33,6 +64,10 @@ class ETLStrategy(ABC):
 
 class OtoMotoETL(ETLStrategy):
     def __init__(self):
+        # create logger
+        self.logger = Logger().get_logger()
+        self.logger.info('ETL_process initialized')
+
         # Retrieve the values from environment variables
         load_dotenv()
         project_id = os.getenv('PROJECT_ID')
@@ -100,7 +135,7 @@ class OtoMotoETL(ETLStrategy):
         response = requests.get(url, headers=headers)
         
         if response.status_code != 200:
-            logging.info(f"Failed to fetch page: {response.status_code}")
+            self.logger.info(f"Failed to fetch page: {response.status_code}")
             return None
         
         # Parse the HTML content using BeautifulSoup
@@ -170,7 +205,7 @@ class OtoMotoETL(ETLStrategy):
 
         except Exception as e:
             # Log the error or handle it appropriately
-            logging.error(f"Error processing input_dict: {e}")
+            self.logger.error(f"Error processing input_dict: {e}")
             return {}
 
     def _create_df_from_row(self, df, row) -> pd.DataFrame:
@@ -284,7 +319,7 @@ class OtoMotoETL(ETLStrategy):
         # Loop through pages
         for page_num in range(page_num_start, page_num_stop+1):
             try:
-                logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting data of: {brand.title()} {model.title()}. Page number: {page_num}")
+                self.logger.info(f"Extracting data of: {brand.title()} {model.title()}. Page number: {page_num}")
 
                 # Pretend human
                 if delay_scraping:
@@ -298,7 +333,7 @@ class OtoMotoETL(ETLStrategy):
 
                 # Check if listings were found
                 if not listings:
-                    logging.info("No car listings found. The website structure may have changed.")
+                    self.logger.info("No car listings found. The website structure may have changed.")
                     return
                 
                 # Extract data from listing
@@ -313,7 +348,7 @@ class OtoMotoETL(ETLStrategy):
                     try:
                         final_data = self._get_data_with_key(json_object, first_key)
                     except:
-                        logging.warning("No car data in here :(")
+                        self.logger.warning("No car data in here :(")
 
                 # Save extracted data to df
                 for input_data in final_data:
@@ -326,7 +361,7 @@ class OtoMotoETL(ETLStrategy):
 
                     df = self._create_df_from_row(df, row)
             except:
-                logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Extracting of page {page_num} failed.")
+                self.logger.info(f"Extracting of page {page_num} failed.")
                 continue
         return df, forced_stop
     
@@ -338,7 +373,7 @@ class OtoMotoETL(ETLStrategy):
         * create new rows e.g. Car_year, price_pln
         * assign id number
         '''
-        logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Transforming data.")
+        self.logger.info(f"Transforming data.")
 
         # REMOVE space FROM STR LOOKLIKE INT
         df['engine_capacity'] = df['engine_capacity'].str.replace(' ', '')
@@ -382,7 +417,7 @@ class OtoMotoETL(ETLStrategy):
 
     def load(self, df, how_add='append'):
         assert how_add.upper()=='APPEND' or how_add.upper()=='TRUNCATE','Variable how_add can be only "append" or "truncate"'
-        logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Loading data.")
+        self.logger.info(f"Loading data.")
 
         # Set up configuration to connect with BigQuery
         job_config = bigquery.LoadJobConfig(
@@ -421,7 +456,7 @@ class OtoMotoETL(ETLStrategy):
             data, forced_stop = self.extarct(**kwargs)
             transformed_data = self.transform(data)
             how_add = kwargs.get('how_add', 'append')
-            self.load(transformed_data,how_add=how_add)
+            # self.load(transformed_data,how_add=how_add)
 
             if forced_stop:
                 return
@@ -429,6 +464,7 @@ class OtoMotoETL(ETLStrategy):
 
 class ContextManager:
     def __init__(self, strategy: ETLStrategy):
+        self.logger = Logger().get_logger()
         self.strategy = strategy
         self.params = {}
 
@@ -438,13 +474,13 @@ class ContextManager:
 
     def run(self):
         try:
-            logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Starting process: {self.strategy.__class__.__name__}")
+            logging.info(f"Starting process: {self.strategy.__class__.__name__}")
             
             self.strategy.run_etl(**self.params)
 
-            logging.info(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] {self.strategy.__class__.__name__} process completed.")
+            logging.info(f"{self.strategy.__class__.__name__} process completed.")
         except Exception as err:
-            logging.warning(f"[{datetime.now():%d-%m-%Y %H:%M:%S}] Process interrupted: {err}")
+            logging.warning(f"Process interrupted: {err}")
 
 
 if __name__=='__main__':
